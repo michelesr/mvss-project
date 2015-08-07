@@ -1,5 +1,8 @@
-# Progetto di Modellazione e Verifica Sistemi Software
+# MVSS Project
 
-Anno accademico 2014/2015 UniUrb
+Progetto Modellazione e Verifica Sistemi Software UniUrb, Sessione Estiva 2015.
+
+Model Checking for an Authentication Protocol
 
 [Specifica](http://www.sti.uniurb.it/aldini/mvss/2015s2a.pdf)
+[Sito del corso](http://www.sti.uniurb.it/aldini/mvss.html)
