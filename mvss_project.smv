@@ -1,0 +1,588 @@
+------------------------
+-- MVSS Project       --
+-- Michele Sorcinelli --
+-- Matricola # 248412 --
+------------------------
+
+---------------------------------------------------
+-- Model Checking for an Authentication Protocol --
+---------------------------------------------------
+
+------------------------------------------------------
+-- Protocol specifications:                         --
+-- http://www.sti.uniurb.it/aldini/mvss/2015s2a.pdf --
+------------------------------------------------------
+
+-------------
+-- Modules --
+-------------
+
+MODULE main
+
+------------------------------------------------------
+------------------------------------------------------
+
+---------------------------
+-- Variables declaration --
+---------------------------
+
+VAR
+
+--------------------
+-- A and B states --
+--------------------
+
+a_state: {idle, s1, r1, s2, auth};
+b_state: {idle, r1, s1, r2, auth};
+
+-- NOTE: "s" is the abbreviation for "sent", "r" for "received"
+-- and "auth" for "authenticated"
+
+----------------------
+-- A and B partners --
+----------------------
+
+a_partner: {null, b, i};
+b_partner: {null, n_ab, n_ai, n_ba, n_bi, n_ia, n_ib, a, b, i};
+
+-- NOTE: while "a_partner" is chosen random when A is in "idle" state,
+-- "b_partner" is assigned from the body of the first valid message B receives.
+
+-- NOTE: "b_partner" has a wider domain because is assigned from the
+-- body of the message, that can contains also nonces.
+
+---------------------------
+-- A and B real partners --
+---------------------------
+
+-- Real partners are assigned from the value of
+-- message_from, when the first valid message is
+-- received from A|B
+
+a_real_partner: {null, a, b, i};
+b_real_partner: {null, a, b, i};
+
+-----------------------
+-- Registered nonces --
+-----------------------
+
+-- nonce registered by A on B|I reply
+a_partner_nonce: {null, n_ab, n_ai, n_ba, n_bi, n_ia, n_ib, a, b, i};
+
+-- nonce registered by B on session start
+b_partner_nonce: {null, n_ab, n_ai, n_ba, n_bi, n_ia, n_ib, a, b, i};
+
+-- NOTE: "n_xy" define the secret nonce that agent X use to authenticate with
+-- agent Y, while "n_yx" is the nonce that Y sent to X in the reply.
+
+----------------------
+-- Message elements --
+----------------------
+
+-- real message sender
+message_from: {null, a, i, b};
+
+-- real message recipient
+message_to: {null, a, i, b};
+
+-- key used to cipher the message
+message_key: {null, pk_a, pk_b, pk_i};
+
+-- message body
+message_body_1: {null, n_ab, n_ai, n_ba, n_bi, n_ia, n_ib, a, b, i};
+message_body_2: {null, n_ab, n_ai, n_ba, n_bi, n_ia, n_ib, a, b, i};
+
+------------------
+-- Compose flag --
+------------------
+
+-- if set to TRUE message from I will be composed
+-- if set to FALSE I will reuse recorded messages
+
+compose : boolean;
+
+----------------------
+-- Database bitmaps --
+----------------------
+
+-- recorded messages database
+mdb_map : word[4];
+
+-- recorded nonces database
+ndb_map : word[4];
+
+-- Databases are implemented as bit array, where
+-- every bit denote a fixed information and is value
+-- define if information is stored or not.
+
+-- For the messages database:
+--
+-- ...1 : {pk_a, n_ai, n_ba}
+-- ..1. : {pk_b, n_ab, a}
+-- .1.. : {pk_a, n_ab, n_ba}
+-- 1... : {pk_b, n_ba}
+
+-- For the nonces database:
+--
+-- ...1 : n_bi
+-- ..1. : n_ai
+-- .1.. : n_ba
+-- 1... : n_ab
+
+-- index of the message to reuse
+mdb_i : -1 .. 3;
+
+-- index values:
+--
+-- -1: I doesn't reuse messages
+-- 0: {pk_a, n_ai, n_ba}
+-- 1: {pk_b, n_ab, a}
+-- 2: {pk_a, n_ab, n_ba}
+-- 3: {pk_b, n_ba}
+
+------------------------------------------------------
+------------------------------------------------------
+
+-------------------------
+-- Variable assignment --
+-------------------------
+
+ASSIGN
+
+init(a_state) := idle;
+init(b_state) := idle;
+init(message_key) := null;
+init(message_body_1) := null;
+init(message_body_2) := null;
+init(message_from) := null;
+init(message_to) := null;
+init(a_partner) := {i, b};
+init(a_partner_nonce) := null;
+init(b_partner) := null;
+init(b_partner_nonce) := null;
+init(a_real_partner) := null;
+init(b_real_partner) := null;
+init(mdb_map) := 0b_0000;
+init(ndb_map) := 0b_0000;
+init(mdb_i) := -1;
+
+---------------
+-- Update DB --
+---------------
+
+next(mdb_map) := case
+
+    -- When a new message is readed, the related bit
+    -- in mbd_map is set to 1 using bitwise | operator
+
+    -- {pk_a, n_ai, n_ba}
+    (message_key = pk_a) & (message_body_1 = n_ai) &
+    (message_body_2 = n_ba) : mdb_map | 0b_0001;
+
+    -- {pk_b, n_ab, a}
+    (message_key = pk_b) & (message_body_1 = n_ab) &
+    (message_body_2 = a) : mdb_map | 0b_0010;
+
+    -- {pk_a, n_ab, n_ba}
+    (message_key = pk_a) & (message_body_1 = n_ab) &
+    (message_body_2 = n_ba) : mdb_map | 0b_0100;
+
+    -- {pk_b, n_ba}
+    (message_key = pk_b) &
+    (message_body_1 = n_ba) : mdb_map | 0b_1000;
+
+    TRUE: mdb_map;
+
+esac;
+
+next(ndb_map) := case
+
+    -- if the key used is not pk_i, I can't record
+    (message_key != pk_i): ndb_map;
+
+    -- if a new nonce is readed, the related bit in 
+    -- ndb_map is set to 1 using bitwise | operator
+
+    -- n_ab
+    (message_body_1 = n_ab): ndb_map | 0b_1000;
+
+    -- n_ba
+    (message_body_1 = n_ba) |
+    (message_body_2 = n_ba): ndb_map | 0b_0100;
+
+    -- n_ai
+    (message_body_1 = n_ai): ndb_map | 0b_0010;
+
+    -- n_bi
+    (message_body_2 = n_bi): ndb_map | 0b_0001;
+
+    TRUE: ndb_map;
+
+esac;
+
+---------------------
+-- Update DB index --
+---------------------
+
+next(mdb_i) := case
+
+    -- chose the index from the availables,
+    -- according to the value of mdb_map
+
+    mdb_map = 0b_0001 : 0;
+    mdb_map = 0b_0010 : 1;
+    mdb_map = 0b_0011 : {0,1};
+    mdb_map = 0b_0100 : 2;
+    mdb_map = 0b_0101 : {0,2};
+    mdb_map = 0b_0110 : {1,2};
+    mdb_map = 0b_0111 : 0 .. 2;
+    mdb_map = 0b_1000 : 3;
+    mdb_map = 0b_1001 : {0,3};
+    mdb_map = 0b_1010 : {1,3};
+    mdb_map = 0b_1011 : {0,1,3};
+    mdb_map = 0b_1100 : {2,3};
+    mdb_map = 0b_1101 : {0,2,3};
+    mdb_map = 0b_1110 : 1 .. 3;
+    mdb_map = 0b_1111 : 0 .. 3;
+
+    -- when mdb_map is 0000
+    TRUE: -1;
+
+esac;
+
+-----------------------------------------------
+-- Reading of messages and state transitions --
+-----------------------------------------------
+
+next(a_state) := case
+    -- auth is a pit state
+    a_state = auth: auth;
+
+    -- change to s1 if you send the start message to B
+    (a_state = idle) & (a_partner = b) & (message_key = pk_b) &
+    (message_body_1 = n_ab) & (message_body_2 = a) &
+    (message_from = a) & (message_to = b): s1;
+
+    -- change to s1 if you send the start message to I
+    (a_state = idle) & (a_partner = i) & (message_key = pk_i) &
+    (message_body_1 = n_ai) & (message_body_2 = a) &
+    (message_from = a) & (message_to = i): s1;
+
+    -- change to r1 if you receive the reply from B
+    (a_state = s1) & (a_partner = b) & (message_key = pk_a) &
+    (message_body_1 = n_ab) & (message_to = a) & (message_from = b): r1;
+
+    -- change to r1 if you receive the reply from I
+    (a_state = s1) & (a_partner = i) & (message_key = pk_a) &
+    (message_body_1 = n_ai) & (message_to = a) & (message_from = i): r1;
+
+    -- change to auth if you send the final message to B
+    (a_state = r1) & (a_partner = b) & (message_key = pk_b) &
+    (message_body_1 = a_partner_nonce) & (message_from = a)
+    & (message_to = a_real_partner): auth;
+
+    -- change to auth if you send the final message to I
+    (a_state = r1) & (a_partner = i) & (message_key = pk_i) &
+    (message_body_1 = a_partner_nonce) & (message_from = a)
+    & (message_to = a_real_partner): auth;
+
+    -- in the other cases, A is stuck in his current state
+    TRUE: a_state;
+esac;
+
+next(b_state) := case
+    -- auth is a pit state
+    b_state = auth: auth;
+
+    -- change to r1 when you receive a valid start message
+    (b_state = idle) & (message_key = pk_b) & (message_to = b) &
+    ((message_body_2 = a) | (message_body_2 = i)): r1;
+
+    -- change to s1 when you send the reply to A
+    (b_state = r1) &  (b_partner = a) & (message_key = pk_a) &
+    (message_body_1 = b_partner_nonce) & (message_body_2 = n_ba) &
+    (message_from = b) & (message_to = b_real_partner): s1;
+
+    -- change to s1 when you send the reply to I
+    (b_state = r1) &  (b_partner = i) & (message_key = pk_i) &
+    (message_body_1 = b_partner_nonce) & (message_body_2 = n_bi) &
+    (message_from = b) & (message_to = b_real_partner): s1;
+
+    -- NOTE: B always sends its reply to his real partner, but
+    -- ciphers with the key of his guessed partner (acquired from
+    -- "message_body_2")
+
+    -- change to auth if you receive the final message from A
+    (b_state = s1) & (b_partner = a) & (message_key = pk_b) &
+    (message_body_1 = n_ba) & (message_from = b_real_partner) &
+    (message_to = b): auth;
+
+    -- change to auth if you receive the final message from I
+    (b_state = s1) & (b_partner = i) & (message_key = pk_b) &
+    (message_body_1 = n_bi) & (message_from = b_real_partner) &
+    (message_to = b): auth;
+
+    -- NOTE: B always read the final message from his real partner,
+    -- but validate the body of the message according to his guessed
+    -- partner.
+
+    -- in the other cases, B is stuck in his current state
+    TRUE: b_state;
+esac;
+
+--------------------
+-- Partner update --
+--------------------
+
+next(a_partner) := case
+    -- if a is stuck in idle, it choses a new random partner from {b,i}
+    next(a_state) != idle: a_partner;
+    TRUE: {b, i};
+esac;
+
+next(b_partner) := case
+    -- b guess is partner from the body of the received message
+    (b_state = idle) & (next(b_state) = r1): message_body_2;
+    TRUE: b_partner;
+esac;
+
+-----------------
+-- Save nonces --
+-----------------
+
+next(b_partner_nonce) := case
+    -- B save the partner nonce when receives the first message
+    (b_state = idle) & (next(b_state) = r1): message_body_1;
+    TRUE: b_partner_nonce;
+esac;
+
+next(a_partner_nonce) := case
+    -- A save the partner nonce when receives the reply
+    (a_state = s1) & (next(a_state) = r1): message_body_2;
+    TRUE: a_partner_nonce;
+esac;
+
+------------------------
+-- Save real partners --
+------------------------
+
+next(b_real_partner) := case
+    -- saved when first message is received
+    (b_state = idle) & (next(b_state) = r1): message_from;
+    TRUE: b_real_partner;
+esac;
+
+next(a_real_partner) := case
+    -- saved when reply is received
+    (a_state = s1) & (next(a_state) = r1): message_from;
+    TRUE: a_real_partner;
+esac;
+
+-------------------
+-- Send messages --
+-------------------
+
+next(message_key) := case
+
+    -- keys are chosen from A and B according to their partner
+
+    (a_partner = b) & (a_state = idle) : pk_b;
+    (a_partner = i) & (a_state = idle) : pk_i;
+
+    (b_partner = a) & (b_state = r1) : pk_a;
+    (b_partner = i) & (b_state = r1) : pk_i;
+
+    (a_partner = b) & (a_state = r1) : pk_b;
+    (a_partner = i) & (a_state = r1) : pk_i;
+
+    -- if I is in compose mode will chose a random key
+
+    (compose): {pk_a, pk_b};
+
+    -- if I isn't in the compose mode will reuse a old message
+
+    (!compose) & (mdb_i = 0): pk_a;
+    (!compose) & (mdb_i = 1): pk_b;
+    (!compose) & (mdb_i = 2): pk_a;
+    (!compose) & (mdb_i = 3): pk_b;
+
+    TRUE: message_key;
+esac;
+
+next(message_body_1) := case
+
+    -- A chose the nonce according to his partner
+    -- for the initial message
+
+    (a_partner = b) & (a_state = idle) : n_ab;
+    (a_partner = i) & (a_state = idle) : n_ai;
+
+    -- B forwards the received nonce on reply
+
+    (b_partner = a) & (b_state = r1) : b_partner_nonce;
+    (b_partner = i) & (b_state = r1) : b_partner_nonce;
+
+    -- A forwards the received nonce for the final message
+
+    (a_partner = b) & (a_state = r1) : a_partner_nonce;
+    (a_partner = i) & (a_state = r1) : a_partner_nonce;
+
+    -- if I is in compose mode will chose a random nonce
+    -- from the ones it knows.
+
+    (compose) & (ndb_map = 0b_0000): {n_ia, n_ib};
+    (compose) & (ndb_map = 0b_0001): {n_ia, n_ib, n_bi};
+    (compose) & (ndb_map = 0b_0010): {n_ia, n_ib, n_ai};
+    (compose) & (ndb_map = 0b_0011): {n_ia, n_ib, n_ai, n_bi};
+    (compose) & (ndb_map = 0b_0100): {n_ia, n_ib, n_ba};
+    (compose) & (ndb_map = 0b_0101): {n_ia, n_ib, n_ba, n_bi};
+    (compose) & (ndb_map = 0b_0110): {n_ia, n_ib, n_ba, n_ai};
+    (compose) & (ndb_map = 0b_0111): {n_ia, n_ib, n_ba, n_ai, n_bi};
+    (compose) & (ndb_map = 0b_1000): {n_ia, n_ib, n_ab};
+    (compose) & (ndb_map = 0b_1001): {n_ia, n_ib, n_ab, n_bi};
+    (compose) & (ndb_map = 0b_1010): {n_ia, n_ib, n_ab, n_ai};
+    (compose) & (ndb_map = 0b_1011): {n_ia, n_ib, n_ab, n_ai, n_bi};
+    (compose) & (ndb_map = 0b_1100): {n_ia, n_ib, n_ab, n_ba};
+    (compose) & (ndb_map = 0b_1101): {n_ia, n_ib, n_ab, n_ba, n_bi};
+    (compose) & (ndb_map = 0b_1110): {n_ia, n_ib, n_ab, n_ba, n_ai};
+    (compose) & (ndb_map = 0b_1111): {n_ia, n_ib, n_ab, n_ba, n_ai, n_bi};
+
+    -- NOTE: I always knows n_ia, n_ib, because are chosen by himself
+
+    -- if I is not in compose mode will reuse a old message
+
+    (!compose) & (mdb_i = 0): n_ai;
+    (!compose) & (mdb_i = 1): n_ab;
+    (!compose) & (mdb_i = 2): n_ab;
+    (!compose) & (mdb_i = 3): n_ba;
+
+    TRUE: message_body_1;
+esac;
+
+next(message_body_2) := case
+
+    -- A write his ID on the inital message
+    (a_partner = b) & (a_state = idle) : a;
+    (a_partner = i) & (a_state = idle) : a;
+
+    -- B chose the nonce according to his partner
+    (b_partner = a) & (b_state = r1) : n_ba;
+    (b_partner = i) & (b_state = r1) : n_bi;
+
+    -- The final message from A has only 1 component in the body
+    (a_partner = b) & (a_state = r1) : null;
+    (a_partner = i) & (a_state = r1) : null;
+
+    -- if I is in compose mode will chose a random values from IDs and
+    -- nonces that he knows.
+    (compose) & (ndb_map = 0b_0000): {a, b, i, n_ia, n_ib};
+    (compose) & (ndb_map = 0b_0001): {a, b, i, n_ia, n_ib, n_bi};
+    (compose) & (ndb_map = 0b_0010): {a, b, i, n_ia, n_ib, n_ai};
+    (compose) & (ndb_map = 0b_0011): {a, b, i, n_ia, n_ib, n_ai, n_bi};
+    (compose) & (ndb_map = 0b_0100): {a, b, i, n_ia, n_ib, n_ba};
+    (compose) & (ndb_map = 0b_0101): {a, b, i, n_ia, n_ib, n_ba, n_bi};
+    (compose) & (ndb_map = 0b_0110): {a, b, i, n_ia, n_ib, n_ba, n_ai};
+    (compose) & (ndb_map = 0b_0111): {a, b, i, n_ia, n_ib, n_ba, n_ai, n_bi};
+    (compose) & (ndb_map = 0b_1000): {a, b, i, n_ia, n_ib, n_ab};
+    (compose) & (ndb_map = 0b_1001): {a, b, i, n_ia, n_ib, n_ab, n_bi};
+    (compose) & (ndb_map = 0b_1010): {a, b, i, n_ia, n_ib, n_ab, n_ai};
+    (compose) & (ndb_map = 0b_1011): {a, b, i, n_ia, n_ib, n_ab, n_ai, n_bi};
+    (compose) & (ndb_map = 0b_1100): {a, b, i, n_ia, n_ib, n_ab, n_ba};
+    (compose) & (ndb_map = 0b_1101): {a, b, i, n_ia, n_ib, n_ab, n_ba, n_bi};
+    (compose) & (ndb_map = 0b_1110): {a, b, i, n_ia, n_ib, n_ab, n_ba, n_ai};
+    (compose) & (ndb_map = 0b_1111): {a, b, i, n_ia, n_ib, n_ab, n_ba, n_ai, n_bi};
+    -- NOTE: I always knows n_ia, n_ib, because are chosen by himself
+
+    -- if I isn't in compose mode, will reuse a old message
+    (!compose) & (mdb_i = 0): n_ba;
+    (!compose) & (mdb_i = 1): a;
+    (!compose) & (mdb_i = 2): n_ba;
+    (!compose) & (mdb_i = 3): null;
+
+    TRUE: message_body_2;
+esac;
+
+next(message_from) := case
+
+    -- message_from will always get the ID of the sender
+
+    (a_partner = b) & (a_state = idle) : a;
+    (a_partner = i) & (a_state = idle) : a;
+
+    (b_partner = a) & (b_state = r1) : b;
+    (b_partner = i) & (b_state = r1) : b;
+
+    (a_partner = b) & (a_state = r1) : a;
+    (a_partner = i) & (a_state = r1) : a;
+
+    (!compose) & (mdb_i != 1): i;
+    (compose): i;
+
+    TRUE: message_from;
+esac;
+
+next(message_to) := case
+
+    -- A sends the message to his partner
+    (a_partner = b) & (a_state = idle) : b;
+    (a_partner = i) & (a_state = idle) : i;
+
+    -- B sends the reply to the sender of the first message
+    (b_partner = a) & (b_state = r1) : b_real_partner;
+    (b_partner = i) & (b_state = r1) : b_real_partner;
+
+    -- A sends the final auth message to the sender of
+    -- last valid message received
+
+    (a_partner = b) & (a_state = r1) : a_real_partner;
+    (a_partner = i) & (a_state = r1) : a_real_partner;
+
+    -- I always chose random the recipient of the message
+    (!compose) & (mdb_i != -1): {a,b};
+    (compose): {a,b};
+
+    TRUE: message_to;
+esac;
+
+------------------------------------------------------
+------------------------------------------------------
+
+-- Model Checking
+
+--------------------
+-- Authentication --
+--------------------
+
+SPEC
+
+-- AUTHENTICATION: If A is convinced to be authenticated with B then
+-- B has started the protocol with A
+
+AG (a_state = auth & a_partner = b -> b_state != idle & b_real_partner = a)
+
+SPEC
+
+-- AUTHENTICATION: If B is convinced to be authenticated with A then
+-- A has started the protocol with B
+
+AG (b_state = auth & b_partner = a -> a_state != idle & a_real_partner = b)
+
+SPEC
+
+-------------
+-- Secrecy --
+-------------
+
+-- SECRECY: the nonce n_ab should never be discovered from I
+AG ((ndb_map & 0b_1000) = 0b_0000)
+
+-- note: the bitwise & is used to isolate the bit that determine if n_ab is
+-- discovered, setting all the others to 0; the result should always be 0000
+
+SPEC
+
+-- SECRECY: the nonce n_ba should never be discovered from I
+AG ((ndb_map & 0b_0100) = 0b_0000)
+
+-- note: the bitwise & is used to isolate the bit that determine if n_ba is
+-- discovered, setting all the others to 0; the result should always be 0000
